@@ -12,13 +12,13 @@ public class GameFlow : MonoBehaviour
     [SerializeField] private float initialInterval = 5f;
     [Tooltip("Minimum spawn interval — won't go faster than this.")]
     [SerializeField] private float minInterval = 0.8f;
-    [Tooltip("How much the interval decreases per second of elapsed game time.")]
-    [SerializeField] private float intervalDecreasePerSecond = 0.05f;
+    [Tooltip("Log curve weight. interval = initial - logFactor * ln(1 + elapsedTime). Larger = decreases faster.")]
+    [SerializeField] private float logFactor = 0.8f;
 
     private float spawnTimer;
     private float elapsedTime = 0f;
 
-    public float CurrentInterval => Mathf.Max(minInterval, initialInterval - elapsedTime * intervalDecreasePerSecond);
+    public float CurrentInterval => Mathf.Max(minInterval, initialInterval - logFactor * Mathf.Log(1f + elapsedTime));
     public float ElapsedTime => elapsedTime;
 
     private void Start()

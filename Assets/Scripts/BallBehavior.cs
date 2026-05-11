@@ -71,13 +71,15 @@ public class BallBehavior : MonoBehaviour
 
         if (cluster.Count < minGroupSize) return;
 
+        int comboIndex = 0;
         for (int i = 0; i < cluster.Count; i++)
         {
             BallBehavior b = cluster[i];
             if (b == null || b.isExploding) continue;
             b.isExploding = true;
             ActiveExplosions++;
-            b.StartCoroutine(b.PopAndDestroy(i * chainDelay));
+            b.StartCoroutine(b.PopAndDestroy(comboIndex * chainDelay, comboIndex));
+            comboIndex++;
         }
     }
 
@@ -115,10 +117,17 @@ public class BallBehavior : MonoBehaviour
         return selfRadius + neighborPadding;
     }
 
-    private IEnumerator PopAndDestroy(float delay)
+    private IEnumerator PopAndDestroy(float delay, int comboIndex)
     {
         if (delay > 0f) yield return new WaitForSeconds(delay);
+
         yield return PopAnimation();
+
+        if (ScoreUI.Instance != null)
+        {
+            ScoreUI.Instance.AddBallScore(transform.position, comboIndex);
+        }
+
         Destroy(gameObject);
     }
 

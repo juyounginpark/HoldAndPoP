@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -28,8 +29,13 @@ public class MapSpawn : MonoBehaviour
     [Tooltip("Vertical step per row as a multiplier of cell width. ~0.866 (sqrt(3)/2) for hex close packing.")]
     [SerializeField] private float verticalStepMultiplier = 0.8660254f;
 
+    [Header("Push Animation")]
+    [Tooltip("Duration to smoothly animate existing balls up before spawning the new row.")]
+    [SerializeField] private float pushAnimationDuration = 0.15f;
+
     private readonly List<Transform> spawnedBalls = new List<Transform>();
     private bool nextRowIsOffset = false;
+    private bool isAnimating = false;
 
     public float BallScale
     {
@@ -50,11 +56,20 @@ public class MapSpawn : MonoBehaviour
 
     public void SpawnRow()
     {
+        if (isAnimating) return;
+
         float rowWidth = GetRowWidth();
         float cellWidth = rowWidth / ballsPerRow;
         float pushAmount = cellWidth * verticalStepMultiplier;
 
-        PushExistingBallsUp(pushAmount);
+        StartCoroutine(SpawnRowCoroutine(pushAmount, rowWidth, cellWidth));
+    }
+
+    private IEnumerator SpawnRowCoroutine(float pushAmount, float rowWidth, float cellWidth)
+    {
+        isAnimating = true;
+
+        yield return AnimatePushUp(pushAmount);
 
         int count = nextRowIsOffset ? ballsPerRow - 1 : ballsPerRow;
         float offsetX = nextRowIsOffset ? cellWidth : 0.5f * cellWidth;
@@ -74,6 +89,68 @@ public class MapSpawn : MonoBehaviour
         }
 
         nextRowIsOffset = !nextRowIsOffset;
+        isAnimating = false;
+    }
+
+    private IEnumerator AnimatePushUp(float amount)
+    {
+        List<Transform> toMove = new List<Transform>();
+        List<Vector3> startPositions = new List<Vector3>();
+        List<Rigidbody2D> rbs = new List<Rigidbody2D>();
+        List<RigidbodyType2D> originalTypes = new List<RigidbodyType2D>();
+
+        for (int i = spawnedBalls.Count - 1; i >= 0; i--)
+        {
+            if (spawnedBalls[i] == null)
+            {
+                spawnedBalls.RemoveAt(i);
+                continue;
+            }
+            toMove.Add(spawnedBalls[i]);
+            startPositions.Add(spawnedBalls[i].position);
+
+            Rigidbody2D rb = spawnedBalls[i].GetComponent<Rigidbody2D>();
+            rbs.Add(rb);
+            if (rb != null)
+            {
+                originalTypes.Add(rb.bodyType);
+                rb.linearVelocity = Vector2.zero;
+                rb.bodyType = RigidbodyType2D.Kinematic;
+            }
+            else
+            {
+                originalTypes.Add(RigidbodyType2D.Dynamic);
+            }
+        }
+
+        Vector3 offset = new Vector3(0f, amount, 0f);
+        float elapsed = 0f;
+        while (elapsed < pushAnimationDuration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / pushAnimationDuration);
+            float eased = 1f - Mathf.Pow(1f - t, 3f);
+            for (int i = 0; i < toMove.Count; i++)
+            {
+                if (toMove[i] != null)
+                {
+                    toMove[i].position = startPositions[i] + offset * eased;
+                }
+            }
+            yield return null;
+        }
+
+        for (int i = 0; i < toMove.Count; i++)
+        {
+            if (toMove[i] != null)
+            {
+                toMove[i].position = startPositions[i] + offset;
+            }
+            if (rbs[i] != null)
+            {
+                rbs[i].bodyType = originalTypes[i];
+            }
+        }
     }
 
     private void ApplyRandomType(GameObject ball)
@@ -90,20 +167,6 @@ public class MapSpawn : MonoBehaviour
         {
             SpriteRenderer sr = ball.GetComponent<SpriteRenderer>();
             if (sr != null) sr.sprite = type.sprite;
-        }
-    }
-
-    private void PushExistingBallsUp(float amount)
-    {
-        for (int i = spawnedBalls.Count - 1; i >= 0; i--)
-        {
-            Transform t = spawnedBalls[i];
-            if (t == null)
-            {
-                spawnedBalls.RemoveAt(i);
-                continue;
-            }
-            t.position += new Vector3(0f, amount, 0f);
         }
     }
 
