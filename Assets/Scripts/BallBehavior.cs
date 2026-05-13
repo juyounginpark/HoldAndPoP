@@ -30,11 +30,25 @@ public class BallBehavior : MonoBehaviour
         if (isExploding) ActiveExplosions--;
     }
 
+    private void OnTriggerEnter2D(Collider2D other)
+    {
+        if (other != null && other.tag == "END" && tag.StartsWith("Ball_") && GameOver.Instance != null)
+        {
+            GameOver.Instance.TriggerGameOver();
+        }
+    }
+
     private void OnCollisionEnter2D(Collision2D collision)
     {
-        if (isExploding) return;
-
         string otherTag = collision.gameObject.tag;
+
+        if (otherTag == "END")
+        {
+            if (tag.StartsWith("Ball_") && GameOver.Instance != null) GameOver.Instance.TriggerGameOver();
+            return;
+        }
+
+        if (isExploding) return;
         if (!otherTag.StartsWith("PBall_")) return;
 
         string otherColor = otherTag.Substring("PBall_".Length);

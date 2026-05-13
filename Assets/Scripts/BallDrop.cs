@@ -19,6 +19,13 @@ public class BallDrop : MonoBehaviour
     [Header("Size Reference")]
     [SerializeField] private MapSpawn mapSpawn;
 
+    [Header("Arm & Hand")]
+    [Tooltip("The moving arm transform. If unassigned, BallDrop moves its own transform.")]
+    [SerializeField] private Transform arm;
+    [SerializeField] private Hand hand;
+    [Tooltip("Object active only in state 1 (default). Deactivated when arm stops.")]
+    [SerializeField] private GameObject state1Object;
+
     [Header("Ball Types")]
     [SerializeField] private BallType[] ballTypes;
 
@@ -42,7 +49,9 @@ public class BallDrop : MonoBehaviour
 
     private void Start()
     {
-        startPosition = transform.position;
+        if (arm == null) arm = transform;
+        startPosition = arm.position;
+        if (state1Object != null) state1Object.SetActive(true);
         SpawnCarriedBall();
     }
 
@@ -60,13 +69,15 @@ public class BallDrop : MonoBehaviour
             case State.Moving:
                 if (Input.GetMouseButton(0))
                 {
-                    transform.position += new Vector3(moveSpeed * Time.deltaTime, 0f, 0f);
+                    arm.position += new Vector3(moveSpeed * Time.deltaTime, 0f, 0f);
                 }
                 else
                 {
                     ReleaseCarriedBall();
                     settleTimer = 0f;
                     state = State.Waiting;
+                    if (hand != null) hand.Stop();
+                    if (state1Object != null) state1Object.SetActive(false);
                 }
                 break;
 
@@ -78,6 +89,8 @@ public class BallDrop : MonoBehaviour
                     {
                         DeactivateAllPBalls();
                         state = State.Returning;
+                        if (hand != null) hand.Return();
+                        if (state1Object != null) state1Object.SetActive(true);
                     }
                 }
                 else
@@ -91,16 +104,18 @@ public class BallDrop : MonoBehaviour
                 if (trashStopTimer <= 0f)
                 {
                     state = State.Returning;
+                    if (hand != null) hand.Return();
+                    if (state1Object != null) state1Object.SetActive(true);
                 }
                 break;
 
             case State.Returning:
-                transform.position = Vector3.MoveTowards(
-                    transform.position,
+                arm.position = Vector3.MoveTowards(
+                    arm.position,
                     startPosition,
                     returnSpeed * Time.deltaTime);
 
-                if (transform.position == startPosition)
+                if (arm.position == startPosition)
                 {
                     state = State.Loading;
                     StartCoroutine(LoadBallAnimation());
@@ -113,7 +128,7 @@ public class BallDrop : MonoBehaviour
 
         if (carriedBall != null)
         {
-            carriedBall.transform.position = transform.position;
+            carriedBall.transform.position = arm.position;
         }
     }
 
@@ -121,10 +136,10 @@ public class BallDrop : MonoBehaviour
     {
         Vector3 pullPosition = startPosition + Vector3.left * pullBackDistance;
 
-        while (transform.position != pullPosition)
+        while (arm.position != pullPosition)
         {
-            transform.position = Vector3.MoveTowards(
-                transform.position,
+            arm.position = Vector3.MoveTowards(
+                arm.position,
                 pullPosition,
                 pullSpeed * Time.deltaTime);
             yield return null;
@@ -132,10 +147,10 @@ public class BallDrop : MonoBehaviour
 
         SpawnCarriedBall();
 
-        while (transform.position != startPosition)
+        while (arm.position != startPosition)
         {
-            transform.position = Vector3.MoveTowards(
-                transform.position,
+            arm.position = Vector3.MoveTowards(
+                arm.position,
                 startPosition,
                 pullSpeed * Time.deltaTime);
             yield return null;
@@ -147,7 +162,7 @@ public class BallDrop : MonoBehaviour
     private void SpawnCarriedBall()
     {
         if (ballPrefab == null) return;
-        carriedBall = Instantiate(ballPrefab, transform.position, Quaternion.identity);
+        carriedBall = Instantiate(ballPrefab, arm.position, Quaternion.identity);
         ApplyBallScale(carriedBall);
         ApplyRandomType(carriedBall);
         SetPhysicsEnabled(carriedBall, false);
@@ -215,7 +230,7 @@ public class BallDrop : MonoBehaviour
         HandleTrashHit(collision.gameObject);
     }
 
-    private void HandleTrashHit(GameObject other)
+    public void HandleTrashHit(GameObject other)
     {
         if (other == null || other.tag != "TRASH") return;
         if (state == State.TrashStopped || state == State.Returning) return;
@@ -227,6 +242,8 @@ public class BallDrop : MonoBehaviour
         }
         trashStopTimer = trashStopDuration;
         state = State.TrashStopped;
+        if (hand != null) hand.Stop();
+        if (state1Object != null) state1Object.SetActive(false);
     }
 
     private bool AreInteractionsDone()

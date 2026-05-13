@@ -11,6 +11,7 @@ TagManager:
   - PBall_GREEN
   - PBall_BLUE
   - TRASH
+  - END
   layers:
   - Default
   - TransparentFX

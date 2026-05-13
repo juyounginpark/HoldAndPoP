@@ -20,6 +20,8 @@ public class ScoreUI : MonoBehaviour
 
     private int totalScore = 0;
 
+    public int TotalScore => totalScore;
+
     private void Awake()
     {
         Instance = this;
