@@ -17,13 +17,18 @@ public class GameFlow : MonoBehaviour
 
     private float spawnTimer;
     private float elapsedTime = 0f;
+    private bool skipInitialSpawn = false;
+    private bool pendingRowSpawn = false;
 
     public float CurrentInterval => Mathf.Max(minInterval, initialInterval - logFactor * Mathf.Log(1f + elapsedTime));
     public float ElapsedTime => elapsedTime;
+    public int InitialRows => initialRows;
+
+    public void SkipInitialSpawn() { skipInitialSpawn = true; }
 
     private void Start()
     {
-        if (mapSpawn != null)
+        if (!skipInitialSpawn && mapSpawn != null)
         {
             for (int i = 0; i < initialRows; i++)
             {
@@ -36,12 +41,21 @@ public class GameFlow : MonoBehaviour
     private void Update()
     {
         elapsedTime += Time.deltaTime;
-        spawnTimer -= Time.deltaTime;
 
+        if (pendingRowSpawn) return;
+
+        spawnTimer -= Time.deltaTime;
         if (spawnTimer <= 0f)
         {
-            if (mapSpawn != null) mapSpawn.SpawnRow();
-            spawnTimer = CurrentInterval;
+            pendingRowSpawn = true;
         }
+    }
+
+    public void OnArmReturning()
+    {
+        if (!pendingRowSpawn) return;
+        pendingRowSpawn = false;
+        if (mapSpawn != null) mapSpawn.SpawnRow();
+        spawnTimer = CurrentInterval;
     }
 }

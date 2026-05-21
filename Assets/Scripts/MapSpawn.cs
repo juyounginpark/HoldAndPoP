@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using DG.Tweening;
 using UnityEngine;
 
 public class MapSpawn : MonoBehaviour
@@ -21,6 +22,33 @@ public class MapSpawn : MonoBehaviour
     [Header("Ball Types")]
     [SerializeField] private BallType[] ballTypes;
 
+    [Header("Type Unlock")]
+    [Tooltip("GameFlow used to read elapsed time for progressive unlocks.")]
+    [SerializeField] private GameFlow gameFlow;
+    [Tooltip("How many ball types are available from the start (must be >= 2 if you want at least two colors at game open).")]
+    [SerializeField] private int initialUnlockedTypes = 2;
+    [Tooltip("Step (seconds) used to scale unlock delays. The Nth extra unlock fires at N*(N+1)/2 * step. Example with step=30: +1 at 30s, +2 at 90s, +3 at 180s, +4 at 300s.")]
+    [SerializeField] private float unlockStepSeconds = 30f;
+
+    public BallType[] BallTypes => ballTypes;
+
+    public int UnlockedCount
+    {
+        get
+        {
+            if (ballTypes == null || ballTypes.Length == 0) return 0;
+            int baseCount = Mathf.Max(1, initialUnlockedTypes);
+            int extra = 0;
+            if (gameFlow != null && unlockStepSeconds > 0f)
+            {
+                float t = gameFlow.ElapsedTime;
+                extra = Mathf.FloorToInt((-1f + Mathf.Sqrt(1f + 8f * t / unlockStepSeconds)) * 0.5f);
+                if (extra < 0) extra = 0;
+            }
+            return Mathf.Clamp(baseCount + extra, 1, ballTypes.Length);
+        }
+    }
+
     [Header("Row Settings")]
     [Tooltip("Max balls in a full row. Short (offset) rows will have one less.")]
     [SerializeField] private int ballsPerRow = 5;
@@ -32,6 +60,8 @@ public class MapSpawn : MonoBehaviour
     [Header("Push Animation")]
     [Tooltip("Duration to smoothly animate existing balls up before spawning the new row.")]
     [SerializeField] private float pushAnimationDuration = 0.15f;
+    [Tooltip("Ease used while pushing existing balls up to make room for the new row.")]
+    [SerializeField] private Ease pushEase = Ease.OutCubic;
 
     private readonly List<Transform> spawnedBalls = new List<Transform>();
     private bool nextRowIsOffset = false;
@@ -52,6 +82,21 @@ public class MapSpawn : MonoBehaviour
         {
             SpawnRow();
         }
+    }
+
+    public GameObject SpawnSingleBall(Vector3 worldPos)
+    {
+        if (ballPrefab == null) return null;
+
+        float rowWidth = GetRowWidth();
+        float cellWidth = rowWidth / ballsPerRow;
+        float scale = cellWidth / unitBallDiameter;
+
+        GameObject ball = Instantiate(ballPrefab, worldPos, Quaternion.identity);
+        ball.transform.localScale = new Vector3(scale, scale, 1f);
+        ApplyRandomType(ball);
+        spawnedBalls.Add(ball.transform);
+        return ball;
     }
 
     public void SpawnRow()
@@ -95,7 +140,6 @@ public class MapSpawn : MonoBehaviour
     private IEnumerator AnimatePushUp(float amount)
     {
         List<Transform> toMove = new List<Transform>();
-        List<Vector3> startPositions = new List<Vector3>();
         List<Rigidbody2D> rbs = new List<Rigidbody2D>();
         List<RigidbodyType2D> originalTypes = new List<RigidbodyType2D>();
 
@@ -107,7 +151,6 @@ public class MapSpawn : MonoBehaviour
                 continue;
             }
             toMove.Add(spawnedBalls[i]);
-            startPositions.Add(spawnedBalls[i].position);
 
             Rigidbody2D rb = spawnedBalls[i].GetComponent<Rigidbody2D>();
             rbs.Add(rb);
@@ -123,29 +166,17 @@ public class MapSpawn : MonoBehaviour
             }
         }
 
-        Vector3 offset = new Vector3(0f, amount, 0f);
-        float elapsed = 0f;
-        while (elapsed < pushAnimationDuration)
+        Sequence seq = DOTween.Sequence();
+        foreach (Transform tr in toMove)
         {
-            elapsed += Time.deltaTime;
-            float t = Mathf.Clamp01(elapsed / pushAnimationDuration);
-            float eased = 1f - Mathf.Pow(1f - t, 3f);
-            for (int i = 0; i < toMove.Count; i++)
-            {
-                if (toMove[i] != null)
-                {
-                    toMove[i].position = startPositions[i] + offset * eased;
-                }
-            }
-            yield return null;
+            if (tr == null) continue;
+            seq.Insert(0f, tr.DOMoveY(tr.position.y + amount, pushAnimationDuration).SetEase(pushEase));
         }
+
+        yield return seq.WaitForCompletion();
 
         for (int i = 0; i < toMove.Count; i++)
         {
-            if (toMove[i] != null)
-            {
-                toMove[i].position = startPositions[i] + offset;
-            }
             if (rbs[i] != null)
             {
                 rbs[i].bodyType = originalTypes[i];
@@ -155,9 +186,10 @@ public class MapSpawn : MonoBehaviour
 
     private void ApplyRandomType(GameObject ball)
     {
-        if (ballTypes == null || ballTypes.Length == 0) return;
+        int unlocked = UnlockedCount;
+        if (unlocked == 0) return;
 
-        BallType type = ballTypes[UnityEngine.Random.Range(0, ballTypes.Length)];
+        BallType type = ballTypes[UnityEngine.Random.Range(0, unlocked)];
 
         if (!string.IsNullOrEmpty(type.tag))
         {

@@ -1,58 +1,94 @@
-using System;
-using System.Collections;
+using DG.Tweening;
 using UnityEngine;
 
 public class BallDrop : MonoBehaviour
 {
     private enum State { Idle, Moving, Waiting, Returning, TrashStopped, Loading }
 
-    [Serializable]
-    public struct BallType
-    {
-        public string tag;
-        public Sprite sprite;
-    }
-
     [Header("Prefab")]
     [SerializeField] private GameObject ballPrefab;
 
-    [Header("Size Reference")]
+    [Header("Size & Type Source")]
+    [Tooltip("Source of both ball scale and the BallType list. BallDrop tags carried balls with the same tag prefixed by 'P' (Ball_RED -> PBall_RED).")]
     [SerializeField] private MapSpawn mapSpawn;
 
     [Header("Arm & Hand")]
     [Tooltip("The moving arm transform. If unassigned, BallDrop moves its own transform.")]
     [SerializeField] private Transform arm;
     [SerializeField] private Hand hand;
+    [Tooltip("Optional. When assigned, BallDrop notifies GameFlow each time the arm starts returning, allowing a pending row to spawn in sync with the return.")]
+    [SerializeField] private GameFlow gameFlow;
     [Tooltip("Object active only in state 1 (default). Deactivated when arm stops.")]
     [SerializeField] private GameObject state1Object;
-
-    [Header("Ball Types")]
-    [SerializeField] private BallType[] ballTypes;
+    [Tooltip("Optional. When assigned, shake intensity drives a per-second chance the player loses grip and drops the ball.")]
+    [SerializeField] private ArmDanger armDanger;
+    [Tooltip("Master toggle for the slip-from-shake feature. Wire a UI Toggle's onValueChanged to SetSlipEnabled.")]
+    [SerializeField] private bool slipEnabled = true;
+    [Tooltip("Average drop attempts per second when shake is at full intensity. Probability scales with intensity^slipChanceRamp.")]
+    [SerializeField] private float slipChancePerSecondAtMax = 4f;
+    [Tooltip("Curve applied to intensity before computing slip chance. >1 keeps slips rare until shake is severe.")]
+    [SerializeField] private float slipChanceRamp = 2f;
 
     [Header("Movement")]
     [SerializeField] private float moveSpeed = 5f;
-    [SerializeField] private float returnSpeed = 8f;
+    [Tooltip("Duration for arm to return to start position after dropping a ball.")]
+    [SerializeField] private float returnDuration = 0.45f;
+    [Tooltip("Ease used while arm slides back to start.")]
+    [SerializeField] private Ease returnEase = Ease.OutCubic;
     [Tooltip("Time AreInteractionsDone must be continuously true before returning. Prevents premature return before gravity kicks in.")]
     [SerializeField] private float settleDuration = 0.3f;
     [Tooltip("Pause duration after hitting TRASH before returning to start.")]
     [SerializeField] private float trashStopDuration = 1.5f;
     [Tooltip("How far left to pull back before spawning new ball.")]
     [SerializeField] private float pullBackDistance = 1f;
-    [Tooltip("Speed of the pull-back / return-to-ready motion.")]
-    [SerializeField] private float pullSpeed = 6f;
+    [Tooltip("Duration of the pull-back motion (left of start) before spawning the next ball.")]
+    [SerializeField] private float pullBackDuration = 0.18f;
+    [Tooltip("Ease used during the pull-back phase. OutBack gives a slight overshoot.")]
+    [SerializeField] private Ease pullBackEase = Ease.OutQuad;
+    [Tooltip("Duration of the push-forward motion from pulled position back to start (loaded with a fresh ball).")]
+    [SerializeField] private float pushForwardDuration = 0.22f;
+    [Tooltip("Ease used during push-forward. OutBack gives a snappy ready pose.")]
+    [SerializeField] private Ease pushForwardEase = Ease.OutBack;
+
+    [Header("Release Dip")]
+    [Tooltip("How far arm dips downward when the ball is released.")]
+    [SerializeField] private float releaseDipDistance = 0.25f;
+    [Tooltip("Duration of the downward dip on release.")]
+    [SerializeField] private float releaseDipDownDuration = 0.08f;
+    [Tooltip("Duration of rising back to release height after the dip.")]
+    [SerializeField] private float releaseDipUpDuration = 0.14f;
+    [Tooltip("Ease used while dipping down.")]
+    [SerializeField] private Ease releaseDipDownEase = Ease.OutQuad;
+    [Tooltip("Ease used while rising back up.")]
+    [SerializeField] private Ease releaseDipUpEase = Ease.OutQuad;
 
     private Vector3 startPosition;
     private State state = State.Idle;
     private float settleTimer = 0f;
     private float trashStopTimer = 0f;
     private GameObject carriedBall;
+    private bool initialized = false;
+    private Tween armTween;
 
     private void Start()
     {
+        Initialize();
+    }
+
+    public void Initialize()
+    {
+        if (initialized) return;
         if (arm == null) arm = transform;
         startPosition = arm.position;
         if (state1Object != null) state1Object.SetActive(true);
         SpawnCarriedBall();
+        initialized = true;
+    }
+
+    public void SetArmPosition(Vector3 pos)
+    {
+        if (arm != null) arm.position = pos;
+        if (carriedBall != null) carriedBall.transform.position = pos;
     }
 
     private void Update()
@@ -70,14 +106,11 @@ public class BallDrop : MonoBehaviour
                 if (Input.GetMouseButton(0))
                 {
                     arm.position += new Vector3(moveSpeed * Time.deltaTime, 0f, 0f);
+                    if (RollSlip()) ForceRelease();
                 }
                 else
                 {
-                    ReleaseCarriedBall();
-                    settleTimer = 0f;
-                    state = State.Waiting;
-                    if (hand != null) hand.Stop();
-                    if (state1Object != null) state1Object.SetActive(false);
+                    ForceRelease();
                 }
                 break;
 
@@ -88,9 +121,7 @@ public class BallDrop : MonoBehaviour
                     if (settleTimer >= settleDuration)
                     {
                         DeactivateAllPBalls();
-                        state = State.Returning;
-                        if (hand != null) hand.Return();
-                        if (state1Object != null) state1Object.SetActive(true);
+                        BeginReturn();
                     }
                 }
                 else
@@ -103,25 +134,11 @@ public class BallDrop : MonoBehaviour
                 trashStopTimer -= Time.deltaTime;
                 if (trashStopTimer <= 0f)
                 {
-                    state = State.Returning;
-                    if (hand != null) hand.Return();
-                    if (state1Object != null) state1Object.SetActive(true);
+                    BeginReturn();
                 }
                 break;
 
             case State.Returning:
-                arm.position = Vector3.MoveTowards(
-                    arm.position,
-                    startPosition,
-                    returnSpeed * Time.deltaTime);
-
-                if (arm.position == startPosition)
-                {
-                    state = State.Loading;
-                    StartCoroutine(LoadBallAnimation());
-                }
-                break;
-
             case State.Loading:
                 break;
         }
@@ -132,31 +149,82 @@ public class BallDrop : MonoBehaviour
         }
     }
 
-    private IEnumerator LoadBallAnimation()
+    private void ForceRelease()
     {
+        ReleaseCarriedBall();
+        PlayReleaseDip();
+        settleTimer = 0f;
+        state = State.Waiting;
+        if (hand != null) hand.Stop();
+        if (state1Object != null) state1Object.SetActive(false);
+    }
+
+    private bool RollSlip()
+    {
+        if (!slipEnabled) return false;
+        if (armDanger == null || carriedBall == null) return false;
+        float intensity = armDanger.Intensity;
+        if (intensity <= 0f) return false;
+        float chancePerSecond = slipChancePerSecondAtMax * Mathf.Pow(intensity, slipChanceRamp);
+        return UnityEngine.Random.value < chancePerSecond * Time.deltaTime;
+    }
+
+    public void SetSlipEnabled(bool enabled)
+    {
+        slipEnabled = enabled;
+    }
+
+    private void PlayReleaseDip()
+    {
+        if (arm == null) return;
+        KillArmTween();
+        float baseY = arm.position.y;
+        Sequence seq = DOTween.Sequence();
+        seq.Append(arm.DOMoveY(baseY - releaseDipDistance, releaseDipDownDuration).SetEase(releaseDipDownEase));
+        seq.Append(arm.DOMoveY(baseY, releaseDipUpDuration).SetEase(releaseDipUpEase));
+        armTween = seq;
+    }
+
+    private void BeginReturn()
+    {
+        state = State.Returning;
+        if (hand != null) hand.Return();
+        if (state1Object != null) state1Object.SetActive(true);
+        if (gameFlow != null) gameFlow.OnArmReturning();
+
+        KillArmTween();
+        armTween = arm.DOMove(startPosition, returnDuration)
+            .SetEase(returnEase)
+            .OnComplete(BeginLoad);
+    }
+
+    private void BeginLoad()
+    {
+        state = State.Loading;
         Vector3 pullPosition = startPosition + Vector3.left * pullBackDistance;
 
-        while (arm.position != pullPosition)
+        KillArmTween();
+        Sequence seq = DOTween.Sequence();
+        seq.Append(arm.DOMove(pullPosition, pullBackDuration).SetEase(pullBackEase));
+        seq.AppendCallback(SpawnCarriedBall);
+        seq.Append(arm.DOMove(startPosition, pushForwardDuration).SetEase(pushForwardEase));
+        seq.OnComplete(() => state = State.Idle);
+        armTween = seq;
+    }
+
+    private void KillArmTween()
+    {
+        if (armTween != null && armTween.IsActive())
         {
-            arm.position = Vector3.MoveTowards(
-                arm.position,
-                pullPosition,
-                pullSpeed * Time.deltaTime);
-            yield return null;
+            armTween.Kill();
         }
+        armTween = null;
+    }
 
-        SpawnCarriedBall();
-
-        while (arm.position != startPosition)
-        {
-            arm.position = Vector3.MoveTowards(
-                arm.position,
-                startPosition,
-                pullSpeed * Time.deltaTime);
-            yield return null;
-        }
-
-        state = State.Idle;
+    private void OnDestroy()
+    {
+        KillArmTween();
+        if (arm != null) arm.DOKill();
     }
 
     private void SpawnCarriedBall()
@@ -184,13 +252,16 @@ public class BallDrop : MonoBehaviour
 
     private void ApplyRandomType(GameObject ball)
     {
-        if (ballTypes == null || ballTypes.Length == 0) return;
+        if (mapSpawn == null) return;
+        MapSpawn.BallType[] types = mapSpawn.BallTypes;
+        int unlocked = mapSpawn.UnlockedCount;
+        if (types == null || unlocked == 0) return;
 
-        BallType type = ballTypes[UnityEngine.Random.Range(0, ballTypes.Length)];
+        MapSpawn.BallType type = types[UnityEngine.Random.Range(0, unlocked)];
 
         if (!string.IsNullOrEmpty(type.tag))
         {
-            ball.tag = type.tag;
+            ball.tag = "P" + type.tag;
         }
         if (type.sprite != null)
         {
@@ -235,11 +306,7 @@ public class BallDrop : MonoBehaviour
         if (other == null || other.tag != "TRASH") return;
         if (state == State.TrashStopped || state == State.Returning) return;
 
-        if (carriedBall != null)
-        {
-            Destroy(carriedBall);
-            carriedBall = null;
-        }
+        ReleaseCarriedBall();
         trashStopTimer = trashStopDuration;
         state = State.TrashStopped;
         if (hand != null) hand.Stop();
@@ -262,22 +329,17 @@ public class BallDrop : MonoBehaviour
         return true;
     }
 
-    private static readonly (string from, string to)[] PBallToBall = new (string, string)[]
-    {
-        ("PBall_RED",   "Ball_RED"),
-        ("PBall_GREEN", "Ball_GREEN"),
-        ("PBall_BLUE",  "Ball_BLUE"),
-    };
-
     private void DeactivateAllPBalls()
     {
-        foreach (var pair in PBallToBall)
+        BallBehavior[] allBalls = FindObjectsByType<BallBehavior>(FindObjectsSortMode.None);
+        foreach (BallBehavior bb in allBalls)
         {
-            GameObject[] balls = GameObject.FindGameObjectsWithTag(pair.from);
-            foreach (GameObject ball in balls)
+            if (bb == null) continue;
+            GameObject ball = bb.gameObject;
+            if (ball == carriedBall) continue;
+            if (ball.tag.StartsWith("PBall_"))
             {
-                if (ball == carriedBall) continue;
-                ball.tag = pair.to;
+                ball.tag = "Ball_" + ball.tag.Substring("PBall_".Length);
             }
         }
     }

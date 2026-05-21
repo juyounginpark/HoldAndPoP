@@ -23,6 +23,8 @@ public class GameOver : MonoBehaviour
         if (isOver) return;
         isOver = true;
 
+        if (InGameSound.Instance != null) InGameSound.Instance.StopMainBgm();
+
         Time.timeScale = 0f;
 
         if (panel != null) panel.SetActive(true);

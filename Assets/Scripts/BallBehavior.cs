@@ -25,6 +25,8 @@ public class BallBehavior : MonoBehaviour
 
     private bool isExploding = false;
 
+    public bool IsExploding => isExploding;
+
     private void OnDestroy()
     {
         if (isExploding) ActiveExplosions--;
@@ -46,6 +48,22 @@ public class BallBehavior : MonoBehaviour
         {
             if (tag.StartsWith("Ball_") && GameOver.Instance != null) GameOver.Instance.TriggerGameOver();
             return;
+        }
+
+        BallBehavior otherBall = collision.gameObject.GetComponent<BallBehavior>();
+        bool playCollisionSound = false;
+        if (otherBall != null)
+        {
+            if (GetInstanceID() < otherBall.GetInstanceID()) playCollisionSound = true;
+        }
+        else if (otherTag == "Wall")
+        {
+            playCollisionSound = true;
+        }
+
+        if (playCollisionSound && InGameSound.Instance != null)
+        {
+            InGameSound.Instance.PlayBallCollision(collision.relativeVelocity.magnitude);
         }
 
         if (isExploding) return;
@@ -86,6 +104,56 @@ public class BallBehavior : MonoBehaviour
         if (cluster.Count < minGroupSize) return;
 
         int comboIndex = 0;
+        BallBehavior lastPopped = null;
+        for (int i = 0; i < cluster.Count; i++)
+        {
+            BallBehavior b = cluster[i];
+            if (b == null || b.isExploding) continue;
+            b.isExploding = true;
+            ActiveExplosions++;
+            b.StartCoroutine(b.PopAndDestroy(comboIndex * chainDelay, comboIndex));
+            lastPopped = b;
+            comboIndex++;
+        }
+
+        NotifyAdjacentTriggers(cluster);
+
+        if (lastPopped != null && SpecialBallFlow.Instance != null)
+        {
+            Vector3 lastPos = lastPopped.transform.position;
+            Vector3 lastScale = lastPopped.transform.localScale;
+            float popDelay = (comboIndex - 1) * chainDelay + popDuration;
+            SpecialBallFlow.Instance.RequestSpecialSpawn(cluster.Count, lastPos, lastScale, popDelay);
+        }
+    }
+
+    public void ForcePopOwnCluster()
+    {
+        if (isExploding) return;
+
+        string myTag = tag;
+        string ballTag, pballTag;
+        if (myTag.StartsWith("PBall_"))
+        {
+            pballTag = myTag;
+            ballTag = "Ball_" + myTag.Substring("PBall_".Length);
+        }
+        else if (myTag.StartsWith("Ball_"))
+        {
+            ballTag = myTag;
+            pballTag = "PBall_" + myTag.Substring("Ball_".Length);
+        }
+        else
+        {
+            ForcePopSelf();
+            return;
+        }
+
+        List<BallBehavior> cluster = new List<BallBehavior>();
+        HashSet<BallBehavior> visited = new HashSet<BallBehavior>();
+        FloodFill(this, ballTag, pballTag, cluster, visited);
+
+        int comboIndex = 0;
         for (int i = 0; i < cluster.Count; i++)
         {
             BallBehavior b = cluster[i];
@@ -94,6 +162,39 @@ public class BallBehavior : MonoBehaviour
             ActiveExplosions++;
             b.StartCoroutine(b.PopAndDestroy(comboIndex * chainDelay, comboIndex));
             comboIndex++;
+        }
+
+        NotifyAdjacentTriggers(cluster);
+    }
+
+    public void ForcePopSelf()
+    {
+        if (isExploding) return;
+        isExploding = true;
+        ActiveExplosions++;
+        StartCoroutine(PopAndDestroy(0f, 0));
+    }
+
+    private void NotifyAdjacentTriggers(List<BallBehavior> popping)
+    {
+        if (popping == null || popping.Count == 0) return;
+        HashSet<ISpecialBallTrigger> notified = new HashSet<ISpecialBallTrigger>();
+
+        foreach (BallBehavior b in popping)
+        {
+            if (b == null) continue;
+            float radius = GetNeighborRadius(b);
+            Collider2D[] hits = Physics2D.OverlapCircleAll(b.transform.position, radius);
+            foreach (Collider2D hit in hits)
+            {
+                if (hit == null) continue;
+                ISpecialBallTrigger trigger = hit.GetComponent<ISpecialBallTrigger>();
+                if (trigger == null) continue;
+                if (notified.Add(trigger))
+                {
+                    trigger.OnAdjacentBallPopping();
+                }
+            }
         }
     }
 
@@ -135,11 +236,21 @@ public class BallBehavior : MonoBehaviour
     {
         if (delay > 0f) yield return new WaitForSeconds(delay);
 
+        if (InGameSound.Instance != null) InGameSound.Instance.PlayBallPop();
+
         yield return PopAnimation();
 
         if (ScoreUI.Instance != null)
         {
-            ScoreUI.Instance.AddBallScore(transform.position, comboIndex);
+            SpecialBallScore special = GetComponent<SpecialBallScore>();
+            if (special != null)
+            {
+                ScoreUI.Instance.AddSpecialBallScore(transform.position, special.points);
+            }
+            else
+            {
+                ScoreUI.Instance.AddBallScore(transform.position, comboIndex);
+            }
         }
 
         Destroy(gameObject);

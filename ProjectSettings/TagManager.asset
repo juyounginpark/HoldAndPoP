@@ -12,6 +12,14 @@ TagManager:
   - PBall_BLUE
   - TRASH
   - END
+  - Wall
+  - Ball_BROWN
+  - PBall_BROWN
+  - Ball_PINK
+  - PBall_PINK
+  - Ball_BLACK
+  - PBall_BLACK
+  - SBall_Bomb
   layers:
   - Default
   - TransparentFX
